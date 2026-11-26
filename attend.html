@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تسجيل الحضور</title>
+<style>
+  :root { --ink:#1b1f24; --muted:#5b6672; --line:#d9dee4; --bg:#f5f7f9; --brand:#0b6b57; --bad:#b4261e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI", Tahoma, Arial, sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:440px; margin:0 auto; padding:24px 16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .tag { display:inline-block; font-size:13px; color:var(--brand); background:#e6f3ef; border-radius:99px; padding:3px 12px; margin-bottom:10px; min-height:22px; }
+  .tag:empty { display:none; }
+  h1 { font-size:20px; margin:0 0 6px; }
+  p { margin:0 0 14px; color:var(--muted); font-size:15px; line-height:1.7; }
+  label { display:block; font-size:14px; color:var(--muted); margin-bottom:6px; }
+  input { width:100%; padding:14px; font-size:20px; letter-spacing:1px; border:1px solid var(--line); border-radius:10px; direction:ltr; text-align:center; font-family:inherit; }
+  button { width:100%; margin-top:14px; padding:14px; font-size:18px; font-weight:600; font-family:inherit; border:0; border-radius:10px; background:var(--brand); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.55; }
+  .msg { margin-top:14px; padding:12px 14px; border-radius:10px; font-size:16px; line-height:1.7; display:none; }
+  .msg.bad { display:block; background:#fdecea; color:var(--bad); }
+  .hint { font-size:13px; color:var(--muted); margin-top:10px; display:none; }
+  .ok { text-align:center; display:none; }
+  .ok .tick { font-size:56px; color:var(--brand); line-height:1; }
+  .ok h2 { margin:10px 0 4px; font-size:22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="formCard">
+    <div class="tag" id="tag"></div>
+    <h1 id="title">تسجيل الحضور</h1>
+    <p>اكتب رقم موبايلك المسجل في التدريب، واضغط تسجيل.</p>
+    <label for="phone">رقم الموبايل</label>
+    <input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="01XXXXXXXXX">
+    <button id="go">سجّل حضوري</button>
+    <div class="hint" id="geoHint">هيطلب منك الموقع للتأكد إنك في مكان التدريب. اضغط "سماح".</div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card ok" id="okCard">
+    <div class="tick">✔</div>
+    <h2 id="okTitle"></h2>
+    <p id="okSub"></p>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var cfg = window.ATT_CONFIG || {};
+  var qs = new URLSearchParams(location.search);
+  var sid = qs.get("sid") || "", tok = qs.get("t") || "";
+  var info = { kind: "in", geo: "off" };
+
+  // معرّف الموبايل (بيتحفظ في المتصفح). مهم: متفتحش الصفحة في وضع Private.
+  function deviceId() {
+    var k = "att_dev", v = null;
+    try { v = localStorage.getItem(k); } catch (e) {}
+    if (!v) {
+      var a = new Uint8Array(16); crypto.getRandomValues(a);
+      v = Array.prototype.map.call(a, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+      try { localStorage.setItem(k, v); } catch (e) {}
+    }
+    return v;
+  }
+
+  var MSG = {
+    SESSION_CLOSED: "الجلسة دي خلصت أو مش شغالة دلوقتي. اسأل المدرب.",
+    TOKEN_EXPIRED: "الـQR ده انتهى. امسح الـQR اللي على الشاشة تاني.",
+    NOT_FOUND: "رقمك مش موجود في قايمة المتدربين. اتأكد من الرقم أو كلّم المدرب.",
+    BAD_PHONE: "اكتب رقم موبايل صحيح.",
+    DEVICE_MISMATCH: "رقمك مسجل من موبايل تاني. كلّم المدرب.",
+    DEVICE_USED_FOR_OTHER: "الموبايل ده اتسجل بيه متدرب تاني. كلّم المدرب.",
+    BAD_DEVICE: "المتصفح ده مش مدعوم. افتح الرابط من Chrome أو Safari العادي (مش Private).",
+    TOO_FAR: "إنت بعيد عن مكان التدريب. لازم تسجل وإنت في القاعة. لو إنت فيها فعلًا كلّم المدرب.",
+    NO_LOCATION: "محتاجين موقعك للتسجيل. فعّل الموقع (GPS) واسمح للمتصفح بيه، وجرّب تاني.",
+    NOT_CHECKED_IN: "مفيش حضور متسجل ليك النهاردة، فمينفعش تسجل انصراف. كلّم المدرب.",
+    BUSY: "الضغط عالي دلوقتي. استنى ثواني وجرّب تاني.",
+    SERVER_ERROR: "حصل خطأ عندنا. جرّب تاني أو كلّم المدرب.",
+    NETWORK: "مفيش اتصال بالإنترنت. اتأكد من النت وجرّب تاني."
+  };
+
+  function showBad(code, text) { var m = $("msg"); m.textContent = text || MSG[code] || MSG.SERVER_ERROR; m.className = "msg bad"; }
+  function lock(code, text) { $("go").disabled = true; $("phone").disabled = true; showBad(code, text); }
+  function label() { return info.kind === "out" ? "سجّل انصرافي" : "سجّل حضوري"; }
+  function api(body) {
+    return fetch(cfg.BACKEND_URL, { method: "POST", body: JSON.stringify(body) }).then(function (r) { return r.json(); });
+  }
+
+  if (!sid || !tok) {
+    lock("TOKEN_EXPIRED", "افتح الصفحة دي عن طريق مسح الـQR اللي على شاشة القاعة.");
+  } else {
+    // نجيب اسم التدريب واليوم من السيرفر ونعرضهم، ونتأكد إن الـQR لسه شغال
+    api({ action: "info", sid: sid, t: tok }).then(function (r) {
+      if (!r || !r.ok) { lock((r && r.code) || "SERVER_ERROR"); return; }
+      info = r;
+      $("tag").textContent = r.training + " — " + r.day;
+      $("title").textContent = r.kind === "out" ? "تسجيل الانصراف" : "تسجيل الحضور";
+      $("go").textContent = label();
+      if (r.geo !== "off") $("geoHint").style.display = "block";
+      if (!r.tokenOk) lock("TOKEN_EXPIRED");
+    }).catch(function () { showBad("NETWORK"); });
+  }
+
+  try { var saved = localStorage.getItem("att_phone"); if (saved) $("phone").value = saved; } catch (e) {}
+
+  // الموقع (اختياري حسب إعداد التدريب). لو فشل بنكمل من غيره والسيرفر يقرر.
+  function getPos() {
+    return new Promise(function (resolve) {
+      if (info.geo === "off" || !navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition(function (p) {
+        resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy });
+      }, function () { resolve(null); }, { enableHighAccuracy: true, timeout: 9000, maximumAge: 20000 });
+    });
+  }
+
+  $("go").addEventListener("click", function () {
+    var phone = $("phone").value.trim();
+    if (phone.replace(/\D/g, "").length < 10 && !/[٠-٩۰-۹]/.test(phone)) { showBad("BAD_PHONE"); return; }
+    $("msg").className = "msg"; $("go").disabled = true; $("go").textContent = "جاري التسجيل...";
+    var reset = function () { $("go").disabled = false; $("go").textContent = label(); };
+    getPos().then(function (pos) {
+      var body = { action: "checkin", sid: sid, t: tok, phone: phone, device: deviceId() };
+      if (pos) { body.lat = pos.lat; body.lng = pos.lng; body.acc = pos.acc; }
+      return api(body);
+    }).then(function (r) {
+      if (r && r.ok) {
+        try { localStorage.setItem("att_phone", phone); } catch (e) {}
+        $("formCard").style.display = "none"; $("okCard").style.display = "block";
+        var out = r.kind === "out";
+        $("okTitle").textContent = r.already ? (out ? "انصرافك متسجل بالفعل" : "حضورك متسجل بالفعل")
+                                              : (out ? "تم تسجيل انصرافك" : "تم تسجيل حضورك");
+        $("okSub").textContent = "أهلاً " + (r.name || "") + " — " + (r.training || "") + " — " + (r.day || "");
+      } else {
+        showBad(r && r.code); reset();
+      }
+    }).catch(function () { showBad("NETWORK"); reset(); });
+  });
+})();
+</script>
+</body>
+</html>
